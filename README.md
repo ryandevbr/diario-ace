@@ -54,7 +54,7 @@ internet.
 Requer **Python 3.11+**.
 
 ```bash
-git clone https://github.com/SEU_USUARIO/diario-ace.git
+git clone https://github.com/ryandevbr/diario-ace.git
 cd diario-ace
 python -m venv .venv
 .venv\Scripts\activate     # Windows
