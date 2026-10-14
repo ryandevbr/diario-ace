@@ -1,0 +1,29 @@
+[project]
+name = "diario_ace"
+version = "1.0.0"
+description = "Diário do Agente de Combate a Endemias"
+authors = [
+    {name = "Ryan Lucas"}
+]
+requires-python = ">=3.11"
+
+dependencies = [
+    "flet>=1.0.0",
+    "reportlab>=4.0.0",
+    "openpyxl>=3.1.0",
+    "certifi>=2025.6.15",
+]
+
+[tool.flet]
+org = "com.yferms.diarioace"
+product = "Diário ACE"
+company = "Ryan Lucas"
+copyright = "© 2026"
+app_id = "com.yferms.diarioace"
+build_number = 10
+
+[tool.flet.app]
+
+[tool.flet.android.permission]
+"android.permission.WRITE_EXTERNAL_STORAGE" = true
+"android.permission.READ_EXTERNAL_STORAGE" = true

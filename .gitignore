@@ -1,0 +1,70 @@
+# ========== Python ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ========== Ambientes virtuais ==========
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.*
+
+# ========== Flet ==========
+.flet/
+app/.flet/
+app/build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# ========== Banco de dados e backups ==========
+# NUNCA versionar o banco nem backups com dados reais
+data/*.db
+data/*.db-journal
+data/backups/
+app/data/*.db
+
+# ========== Backups de arquivo do editor ==========
+*.bak
+*.tmp
+*.swp
+*~
+
+# ========== IDEs ==========
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ========== Sistema operacional ==========
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========== Flet build artifacts ==========
+app/build/
+build/
+
+# ========== Arquivos pessoais com dados reais ==========
+*.xlsx
+*.xls
+*.pdf
