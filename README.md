@@ -10,6 +10,16 @@ internet.
 
 ---
 
+## Screenshots
+
+| Hoje | Meu TR |
+|---|---|
+| ![Tela Hoje](docs/screenshot_hoje.jpg) | ![Meu TR](docs/screenshot_meu_tr.jpg) |
+
+**Relatório em PDF gerado pelo app:**
+
+![Relatório de TR](docs/screenshot_relatorio.jpg)
+
 ## Funcionalidades
 
 - **Produção diária** — registro de imóveis trabalhados, fechados, resgatados
