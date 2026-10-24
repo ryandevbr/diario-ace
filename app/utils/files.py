@@ -1,6 +1,5 @@
 import flet as ft
 
-
 def obter_file_picker(page: ft.Page) -> ft.FilePicker:
     """Devolve um FilePicker compartilhado por page."""
     if not getattr(page, "_shared_file_picker", None):

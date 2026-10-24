@@ -1,42 +1,48 @@
 from datetime import date
-import os
-import tempfile
 import flet as ft
 
-from app.services import tr_service, recuperacao_service, pdf_service
-from app.utils.datas import para_br
-from app.utils.files import obter_file_picker
-from app.utils.share import compartilhar_arquivo
 from app.components.ui import card, snack
-
+from app.services import pdf_service, recuperacao_service, tr_service
+from app.utils.datas import para_br
+from app.utils.share import compartilhar_ou_salvar_pdf, salvar_pdf_com_picker
 
 CORES_STATUS = {
-    "fechado":    ft.Colors.RED_500,
-    "atendida":   ft.Colors.GREEN_600,
+    "fechado": ft.Colors.RED_500,
+    "atendida": ft.Colors.GREEN_600,
     "abandonada": ft.Colors.GREY_600,
-    "recusado":   ft.Colors.ORANGE_700,
+    "recusado": ft.Colors.ORANGE_700,
 }
 
 LABEL_STATUS = {
-    "fechado":    "Fechado",
-    "atendida":   "Atendida",
+    "fechado": "Fechado",
+    "atendida": "Atendida",
     "abandonada": "Abandonada",
-    "recusado":   "Recusado",
+    "recusado": "Recusado",
 }
 
 LADOS = [f"Lado {i}" for i in range(1, 9)]
 QUARTEIROES = [str(i) for i in range(1, 61)]
 
-# Fundo de botões/chips inativos, adaptável ao tema
 FUNDO_INATIVO = getattr(ft.Colors, "SURFACE_VARIANT", ft.Colors.GREY_100)
-# Cor secundária do tema para textos que precisam funcionar nos dois modos
 TEXTO_SECUNDARIO = getattr(ft.Colors, "ON_SURFACE_VARIANT", ft.Colors.GREY_700)
+PEQUENAS_PREPOSICOES = {
+    "de",
+    "da",
+    "do",
+    "das",
+    "dos",
+    "e",
+    "a",
+    "o",
+    "as",
+    "os",
+    "na",
+    "no",
+}
 
 
 def capitalizar_rua(s: str) -> str:
     """Capitaliza cada palavra, exceto preposições curtas no meio."""
-    pequenas = {"de", "da", "do", "das", "dos", "e", "a", "o",
-                "as", "os", "na", "no"}
     palavras = s.strip().split()
     if not palavras:
         return ""
@@ -44,7 +50,7 @@ def capitalizar_rua(s: str) -> str:
     for i, p in enumerate(palavras):
         if i == 0:
             resultado.append(p.capitalize())
-        elif p.lower() in pequenas:
+        elif p.lower() in PEQUENAS_PREPOSICOES:
             resultado.append(p.lower())
         else:
             resultado.append(p.capitalize())
@@ -55,15 +61,16 @@ def build(page: ft.Page) -> ft.Control:
     hoje = date.today()
     tr = tr_service.tr_por_data(hoje)
     if tr is None:
-        return ft.Container(padding=20, content=ft.Text("Sem TR ativo para hoje."))
+        return ft.Container(
+            padding=20, content=ft.Text("Sem TR ativo para hoje.")
+        )
 
-    filtro_atual = {"status": None, "quarteirao": None}
+    filtro_atual: dict[str, str | None] = {"status": None, "quarteirao": None}
 
     filtros_btns = ft.Row(spacing=6, wrap=True)
     lista = ft.Column(spacing=8, controls=[])
     resumo = ft.Text("", size=13, color=TEXTO_SECUNDARIO)
 
-    # ---------- Filtro por quarteirão ----------
     filtro_quarteirao_dd = ft.Dropdown(
         label="Filtrar por quarteirão",
         options=[ft.dropdown.Option(key="", text="Todos")],
@@ -71,23 +78,51 @@ def build(page: ft.Page) -> ft.Control:
         width=200,
     )
 
-    def on_quarteirao_change(e):
+    def on_quarteirao_change(e) -> None:
         v = filtro_quarteirao_dd.value or ""
         filtro_atual["quarteirao"] = v or None
         recarregar()
 
     filtro_quarteirao_dd.on_select = on_quarteirao_change
 
-    # ---------- Montagem dos filtros ----------
-    def montar_filtros():
+    def _filtrar_itens(todos: list[dict]) -> list[dict]:
+        itens = todos
+        if filtro_atual["status"]:
+            itens = [
+                it for it in itens if it["status"] == filtro_atual["status"]
+            ]
+        if filtro_atual["quarteirao"]:
+            itens = [
+                it
+                for it in itens
+                if it.get("quarteirao") == filtro_atual["quarteirao"]
+            ]
+        return itens
+
+    def montar_filtros(todos: list[dict], contagem: dict[str, int]) -> None:
         filtros_btns.controls.clear()
-        contagem = recuperacao_service.contar_por_status(tr.id)
         opcoes = [
             (None, "Todas", ft.Colors.TEAL_700),
-            ("fechado", f"Fechadas ({contagem.get('fechado', 0)})", CORES_STATUS["fechado"]),
-            ("atendida", f"Atendidas ({contagem.get('atendida', 0)})", CORES_STATUS["atendida"]),
-            ("abandonada", f"Abandonadas ({contagem.get('abandonada', 0)})", CORES_STATUS["abandonada"]),
-            ("recusado", f"Recusados ({contagem.get('recusado', 0)})", CORES_STATUS["recusado"]),
+            (
+                "fechado",
+                f"Fechadas ({contagem.get('fechado', 0)})",
+                CORES_STATUS["fechado"],
+            ),
+            (
+                "atendida",
+                f"Atendidas ({contagem.get('atendida', 0)})",
+                CORES_STATUS["atendida"],
+            ),
+            (
+                "abandonada",
+                f"Abandonadas ({contagem.get('abandonada', 0)})",
+                CORES_STATUS["abandonada"],
+            ),
+            (
+                "recusado",
+                f"Recusados ({contagem.get('recusado', 0)})",
+                CORES_STATUS["recusado"],
+            ),
         ]
         for valor, label, cor in opcoes:
             ativo = filtro_atual["status"] == valor
@@ -104,13 +139,13 @@ def build(page: ft.Page) -> ft.Control:
                 )
             )
 
-        todos = recuperacao_service.listar_por_tr(tr.id, None)
         quarteiroes = sorted(
             {it.get("quarteirao") for it in todos if it.get("quarteirao")},
             key=lambda q: int(q) if str(q).isdigit() else 0,
         )
-        filtro_quarteirao_dd.options = [ft.dropdown.Option(key="", text="Todos")] + [
-            ft.dropdown.Option(key=q, text=f"Quadra {q}") for q in quarteiroes
+        filtro_quarteirao_dd.options = [
+            ft.dropdown.Option(key="", text="Todos"),
+            *[ft.dropdown.Option(key=q, text=f"Quadra {q}") for q in quarteiroes],
         ]
         if filtro_atual["quarteirao"] in quarteiroes:
             filtro_quarteirao_dd.value = filtro_atual["quarteirao"]
@@ -118,11 +153,11 @@ def build(page: ft.Page) -> ft.Control:
             filtro_atual["quarteirao"] = None
             filtro_quarteirao_dd.value = ""
 
-    def definir_filtro(valor):
+    def definir_filtro(valor: str | None) -> None:
         filtro_atual["status"] = valor
         recarregar()
 
-    def montar_resumo(contagem: dict):
+    def montar_resumo(contagem: dict[str, int]) -> None:
         total = sum(contagem.values())
         resumo.value = (
             f"Total no TR: {total} endereços — "
@@ -131,89 +166,71 @@ def build(page: ft.Page) -> ft.Control:
             f"{contagem.get('abandonada', 0)} abandonados."
         )
 
-    def montar_lista():
+    def montar_lista(itens_filtrados: list[dict]) -> None:
         lista.controls.clear()
-        itens = recuperacao_service.listar_por_tr(tr.id, filtro_atual["status"])
-        if filtro_atual["quarteirao"]:
-            itens = [it for it in itens if it.get("quarteirao") == filtro_atual["quarteirao"]]
-        if not itens:
+        if not itens_filtrados:
             lista.controls.append(
-                ft.Text("Nenhum endereço cadastrado nesta categoria.",
-                        color=TEXTO_SECUNDARIO)
+                ft.Text(
+                    "Nenhum endereço cadastrado nesta categoria.",
+                    color=TEXTO_SECUNDARIO,
+                )
             )
             return
-        for item in itens:
+        for item in itens_filtrados:
             lista.controls.append(_item_recuperacao(page, item, recarregar))
 
-    picker = obter_file_picker(page)
-
-    def _itens_filtrados():
-        itens = recuperacao_service.listar_por_tr(tr.id, filtro_atual["status"])
-        if filtro_atual["quarteirao"]:
-            itens = [it for it in itens if it.get("quarteirao") == filtro_atual["quarteirao"]]
-        return itens
-
-    def _sufixo_filtros():
+    def _itens_e_nome_pdf() -> tuple[list[dict], str]:
+        todos = recuperacao_service.listar_por_tr(tr.id, None)
+        itens = _filtrar_itens(todos)
         partes = []
         if filtro_atual["status"]:
             partes.append(filtro_atual["status"])
         if filtro_atual["quarteirao"]:
             partes.append(f"q{filtro_atual['quarteirao']}")
-        return f"_{'_'.join(partes)}" if partes else ""
+        sufixo = f"_{'_'.join(partes)}" if partes else ""
+        nome = f"recuperacao_TR{tr.numero}{sufixo}_{date.today().isoformat()}.pdf"
+        return itens, nome
 
-    # ---------- PDF ----------
-    async def exportar_pdf(e):
+    async def exportar_pdf(e) -> None:
         try:
-            itens = _itens_filtrados()
-            sufixo = _sufixo_filtros()
-            nome = f"recuperacao_TR{tr.numero}{sufixo}_{date.today().isoformat()}.pdf"
-            caminho = await picker.save_file(
-                dialog_title="Salvar PDF",
-                file_name=nome,
-                allowed_extensions=["pdf"],
+            itens, nome = _itens_e_nome_pdf()
+            await salvar_pdf_com_picker(
+                page,
+                nome,
+                lambda caminho: pdf_service.exportar_recuperacao_pdf(
+                    caminho, tr, itens
+                ),
             )
-            if not caminho:
-                snack(page, "Exportação cancelada.", ft.Colors.ORANGE_600)
-                return
-            pdf_service.exportar_recuperacao_pdf(caminho, tr, itens)
-            snack(page, f"PDF salvo em {caminho}")
         except Exception as ex:
             snack(page, f"Erro ao gerar PDF: {ex}", ft.Colors.RED_500)
 
-    async def compartilhar_pdf(e):
+    async def compartilhar_pdf(e) -> None:
         try:
-            itens = _itens_filtrados()
-            sufixo = _sufixo_filtros()
-            nome = f"recuperacao_TR{tr.numero}{sufixo}_{date.today().isoformat()}.pdf"
-            caminho = os.path.join(tempfile.gettempdir(), nome)
-            pdf_service.exportar_recuperacao_pdf(caminho, tr, itens)
-
-            ok = await compartilhar_arquivo(
-                page, caminho,
-                texto=f"Recuperação TR {tr.numero}",
+            itens, nome = _itens_e_nome_pdf()
+            await compartilhar_ou_salvar_pdf(
+                page,
+                nome,
+                f"Recuperação TR {tr.numero}",
+                lambda caminho: pdf_service.exportar_recuperacao_pdf(
+                    caminho, tr, itens
+                ),
             )
-            if not ok:
-                caminho_salvo = await picker.save_file(
-                    dialog_title="Salvar PDF",
-                    file_name=nome,
-                    allowed_extensions=["pdf"],
-                )
-                if caminho_salvo:
-                    pdf_service.exportar_recuperacao_pdf(caminho_salvo, tr, itens)
-                    snack(page, f"PDF salvo em {caminho_salvo}")
-                else:
-                    snack(page, "Compartilhamento indisponível.", ft.Colors.ORANGE_600)
         except Exception as ex:
             snack(page, f"Erro ao compartilhar: {ex}", ft.Colors.RED_500)
 
-    def recarregar():
-        contagem = recuperacao_service.contar_por_status(tr.id)
+    def recarregar() -> None:
+        # Consulta única ao banco por atualização de tela
+        todos = recuperacao_service.listar_por_tr(tr.id, None)
+        contagem: dict[str, int] = {}
+        for it in todos:
+            st = it["status"]
+            contagem[st] = contagem.get(st, 0) + 1
+
         montar_resumo(contagem)
-        montar_filtros()
-        montar_lista()
+        montar_filtros(todos, contagem)
+        montar_lista(_filtrar_itens(todos))
         page.update()
 
-    # ---------- Formulário de cadastro ----------
     form_quarteirao_dd = ft.Dropdown(
         label="Quarteirão",
         options=[ft.dropdown.Option(key=q, text=q) for q in QUARTEIROES],
@@ -230,9 +247,9 @@ def build(page: ft.Page) -> ft.Control:
     campo_numero = ft.TextField(label="Número (ex.: 130A, 130/1)")
     campo_obs = ft.TextField(label="Observação (opcional)")
 
-    def salvar(e):
-        rua = campo_rua.value.strip()
-        numero = campo_numero.value.strip()
+    def salvar(e) -> None:
+        rua = (campo_rua.value or "").strip()
+        numero = (campo_numero.value or "").strip()
         if not rua or not numero:
             snack(page, "Rua e número são obrigatórios.", ft.Colors.RED_500)
             return
@@ -244,7 +261,7 @@ def build(page: ft.Page) -> ft.Control:
             form_lado_dd.value or "",
             rua,
             numero,
-            campo_obs.value.strip() or None,
+            (campo_obs.value or "").strip() or None,
         )
         campo_rua.value = ""
         campo_numero.value = ""
@@ -252,24 +269,34 @@ def build(page: ft.Page) -> ft.Control:
         snack(page, "Endereço adicionado à lista de recuperação.")
         recarregar()
 
-    form = card(page, ft.Column([
-        ft.Text("Adicionar endereço", size=14, weight=ft.FontWeight.BOLD),
-        ft.Row([form_quarteirao_dd, form_lado_dd], spacing=8),
-        campo_rua,
-        campo_numero,
-        campo_obs,
-        ft.Button(
-            "Adicionar à lista",
-            icon=ft.Icons.ADD_LOCATION_ALT,
-            on_click=salvar,
-            style=ft.ButtonStyle(
-                bgcolor=ft.Colors.TEAL_700,
-                color=ft.Colors.WHITE,
-                shape=ft.RoundedRectangleBorder(radius=10),
-                padding=ft.Padding.symmetric(horizontal=20, vertical=14),
-            ),
+    form = card(
+        page,
+        ft.Column(
+            [
+                ft.Text(
+                    "Adicionar endereço", size=14, weight=ft.FontWeight.BOLD
+                ),
+                ft.Row([form_quarteirao_dd, form_lado_dd], spacing=8),
+                campo_rua,
+                campo_numero,
+                campo_obs,
+                ft.Button(
+                    "Adicionar à lista",
+                    icon=ft.Icons.ADD_LOCATION_ALT,
+                    on_click=salvar,
+                    style=ft.ButtonStyle(
+                        bgcolor=ft.Colors.TEAL_700,
+                        color=ft.Colors.WHITE,
+                        shape=ft.RoundedRectangleBorder(radius=10),
+                        padding=ft.Padding.symmetric(
+                            horizontal=20, vertical=14
+                        ),
+                    ),
+                ),
+            ],
+            spacing=10,
         ),
-    ], spacing=10))
+    )
 
     recarregar()
 
@@ -278,49 +305,68 @@ def build(page: ft.Page) -> ft.Control:
         controls=[
             ft.Container(
                 padding=20,
-                content=ft.Column([
-                    ft.Text("Recuperação", size=28, weight=ft.FontWeight.BOLD),
-                    ft.Text(
-                        f"TR {tr.numero} — {para_br(tr.data_inicio)} a {para_br(tr.data_fim)}",
-                        size=13, color=TEXTO_SECUNDARIO,
-                    ),
-                    ft.Container(height=8),
-                    resumo,
-                    ft.Container(height=4),
-                    ft.Row([
-                        ft.Button(
-                            "Exportar PDF",
-                            icon=ft.Icons.PICTURE_AS_PDF,
-                            on_click=exportar_pdf,
-                            style=ft.ButtonStyle(
-                                bgcolor=ft.Colors.GREY_800,
-                                color=ft.Colors.WHITE,
-                                shape=ft.RoundedRectangleBorder(radius=10),
-                                padding=ft.Padding.symmetric(horizontal=16, vertical=10),
-                            ),
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "Recuperação", size=28, weight=ft.FontWeight.BOLD
                         ),
-                        ft.Button(
-                            "Compartilhar PDF",
-                            icon=ft.Icons.SHARE,
-                            on_click=compartilhar_pdf,
-                            style=ft.ButtonStyle(
-                                bgcolor=ft.Colors.BLUE_700,
-                                color=ft.Colors.WHITE,
-                                shape=ft.RoundedRectangleBorder(radius=10),
-                            ),
+                        ft.Text(
+                            f"TR {tr.numero} — {para_br(tr.data_inicio)} a {para_br(tr.data_fim)}",
+                            size=13,
+                            color=TEXTO_SECUNDARIO,
                         ),
-                    ], spacing=8, wrap=True),
-                    ft.Container(height=8),
-                    form,
-                    ft.Container(height=8),
-                    ft.Text("Filtrar por status", size=12,
-                            weight=ft.FontWeight.BOLD, color=TEXTO_SECUNDARIO),
-                    filtros_btns,
-                    ft.Container(height=6),
-                    filtro_quarteirao_dd,
-                    ft.Container(height=8),
-                    lista,
-                ]),
+                        ft.Container(height=8),
+                        resumo,
+                        ft.Container(height=4),
+                        ft.Row(
+                            [
+                                ft.Button(
+                                    "Exportar PDF",
+                                    icon=ft.Icons.PICTURE_AS_PDF,
+                                    on_click=exportar_pdf,
+                                    style=ft.ButtonStyle(
+                                        bgcolor=ft.Colors.GREY_800,
+                                        color=ft.Colors.WHITE,
+                                        shape=ft.RoundedRectangleBorder(
+                                            radius=10
+                                        ),
+                                        padding=ft.Padding.symmetric(
+                                            horizontal=16, vertical=10
+                                        ),
+                                    ),
+                                ),
+                                ft.Button(
+                                    "Compartilhar PDF",
+                                    icon=ft.Icons.SHARE,
+                                    on_click=compartilhar_pdf,
+                                    style=ft.ButtonStyle(
+                                        bgcolor=ft.Colors.BLUE_700,
+                                        color=ft.Colors.WHITE,
+                                        shape=ft.RoundedRectangleBorder(
+                                            radius=10
+                                        ),
+                                    ),
+                                ),
+                            ],
+                            spacing=8,
+                            wrap=True,
+                        ),
+                        ft.Container(height=8),
+                        form,
+                        ft.Container(height=8),
+                        ft.Text(
+                            "Filtrar por status",
+                            size=12,
+                            weight=ft.FontWeight.BOLD,
+                            color=TEXTO_SECUNDARIO,
+                        ),
+                        filtros_btns,
+                        ft.Container(height=6),
+                        filtro_quarteirao_dd,
+                        ft.Container(height=8),
+                        lista,
+                    ]
+                ),
             )
         ],
     )
@@ -340,12 +386,12 @@ def _item_recuperacao(page: ft.Page, item: dict, recarregar) -> ft.Control:
         local.append(item["lado"])
     local_txt = " · ".join(local)
 
-    def mudar_status(novo):
+    def mudar_status(novo: str) -> None:
         recuperacao_service.atualizar_status(item["id"], novo)
         snack(page, f"Marcado como {LABEL_STATUS[novo].lower()}.")
         recarregar()
 
-    def excluir(e):
+    def excluir(e) -> None:
         def confirmar(ev):
             recuperacao_service.remover(item["id"])
             page.pop_dialog()
@@ -356,13 +402,15 @@ def _item_recuperacao(page: ft.Page, item: dict, recarregar) -> ft.Control:
             title=ft.Text("Excluir endereço?"),
             content=ft.Text(endereco),
             actions=[
-                ft.TextButton("Cancelar", on_click=lambda ev: page.pop_dialog()),
+                ft.TextButton(
+                    "Cancelar", on_click=lambda ev: page.pop_dialog()
+                ),
                 ft.Button("Excluir", on_click=confirmar),
             ],
         )
         page.show_dialog(dialog)
 
-    def botao_status(valor, label, icone):
+    def botao_status(valor: str, label: str, icone: str) -> ft.TextButton:
         ativo = valor == status
         return ft.TextButton(
             label,
@@ -377,31 +425,79 @@ def _item_recuperacao(page: ft.Page, item: dict, recarregar) -> ft.Control:
             ),
         )
 
-    return card(page, ft.Column([
-        ft.Row([
-            ft.Column([
-                ft.Text(endereco, weight=ft.FontWeight.BOLD, size=15),
-                ft.Text(local_txt, size=12, color=TEXTO_SECUNDARIO) if local_txt else ft.Container(),
-                ft.Text(item.get("observacao") or "", size=11,
-                        color=TEXTO_SECUNDARIO) if item.get("observacao") else ft.Container(),
-            ], spacing=2, expand=True),
-            ft.Container(
-                content=ft.Text(LABEL_STATUS[status], size=11,
-                                color=ft.Colors.WHITE, weight=ft.FontWeight.W_600),
-                padding=ft.Padding.symmetric(horizontal=10, vertical=4),
-                bgcolor=cor,
-                border_radius=20,
-            ),
-            ft.IconButton(
-                icon=ft.Icons.DELETE_OUTLINE,
-                icon_color=ft.Colors.RED_400,
-                on_click=excluir,
-            ),
-        ], spacing=6),
-        ft.Row([
-            botao_status("fechado", "Fechada", ft.Icons.LOCK_OUTLINE),
-            botao_status("atendida", "Atendida", ft.Icons.CHECK_CIRCLE_OUTLINE),
-            botao_status("abandonada", "Abandonada", ft.Icons.BLOCK),
-            botao_status("recusado", "Recusado", ft.Icons.DO_NOT_DISTURB),
-        ], spacing=6, wrap=True),
-    ], spacing=8))
+    return card(
+        page,
+        ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    endereco,
+                                    weight=ft.FontWeight.BOLD,
+                                    size=15,
+                                ),
+                                (
+                                    ft.Text(
+                                        local_txt,
+                                        size=12,
+                                        color=TEXTO_SECUNDARIO,
+                                    )
+                                    if local_txt
+                                    else ft.Container()
+                                ),
+                                (
+                                    ft.Text(
+                                        item.get("observacao") or "",
+                                        size=11,
+                                        color=TEXTO_SECUNDARIO,
+                                    )
+                                    if item.get("observacao")
+                                    else ft.Container()
+                                ),
+                            ],
+                            spacing=2,
+                            expand=True,
+                        ),
+                        ft.Container(
+                            content=ft.Text(
+                                LABEL_STATUS[status],
+                                size=11,
+                                color=ft.Colors.WHITE,
+                                weight=ft.FontWeight.W_600,
+                            ),
+                            padding=ft.Padding.symmetric(
+                                horizontal=10, vertical=4
+                            ),
+                            bgcolor=cor,
+                            border_radius=20,
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            icon_color=ft.Colors.RED_400,
+                            on_click=excluir,
+                        ),
+                    ],
+                    spacing=6,
+                ),
+                ft.Row(
+                    [
+                        botao_status("fechado", "Fechada", ft.Icons.LOCK_OUTLINE),
+                        botao_status(
+                            "atendida",
+                            "Atendida",
+                            ft.Icons.CHECK_CIRCLE_OUTLINE,
+                        ),
+                        botao_status("abandonada", "Abandonada", ft.Icons.BLOCK),
+                        botao_status(
+                            "recusado", "Recusado", ft.Icons.DO_NOT_DISTURB
+                        ),
+                    ],
+                    spacing=6,
+                    wrap=True,
+                ),
+            ],
+            spacing=8,
+        ),
+    )

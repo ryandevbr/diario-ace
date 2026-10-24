@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import date
 
+
 @dataclass
 class TR:
     id: int
@@ -12,19 +13,27 @@ class TR:
     meta_max: int
     producao_inicial: int = 0
 
+
 @dataclass
 class Producao:
     id: int
     data: date
     tr_id: int
     quantidade: int
-    motivo_id: int | None
-    observacao: str | None
+    motivo_id: int | None = None
+    observacao: str | None = None
+    bairro_id: int | None = None
+    atividade: str | None = None
+    fechados: int = 0
+    resgatados: int = 0
+    recusados: int = 0
+    pendencia: str | None = None
+
 
 @dataclass
 class Evento:
     id: int
     data: date
-    tipo: str          # feriado, ferias, atestado, reuniao, capacitacao, outro
-    fracao: float      # 1.0 = dia todo, 0.5 = meio período, etc.
-    observacao: str | None
+    tipo: str
+    fracao: float
+    observacao: str | None = None

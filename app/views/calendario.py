@@ -1,24 +1,15 @@
 from datetime import date
 import flet as ft
 
-from app.services import tr_service, evento_service
-from app.utils.datas import para_br, de_br, escolher_data
-from app.components.ui import snack, chip_tipo_evento, CORES_TIPO_EVENTO
-
-TIPOS = [
-    ("feriado", "Feriado"),
-    ("ferias", "Férias"),
-    ("atestado", "Atestado"),
-    ("reuniao", "Reunião"),
-    ("capacitacao", "Capacitação"),
-    ("folga", "Folga"),
-    ("chuva", "Chuva"),
-    ("deslocamento", "Deslocamento"),
-    ("mudanca_atividade", "Mudança de Atividade"),
-    ("compensacao", "Compensação de Hora-Extra"),
-    ("resgate_vacinacao", "Resgate de Vacinação Antirrábica"),
-    ("outro", "Outro"),
-]
+from app.components.ui import (
+    CORES_TIPO_EVENTO,
+    TIPOS_EVENTO,
+    campo_data_picker,
+    chip_tipo_evento,
+    snack,
+)
+from app.services import banco_horas_service, evento_service, tr_service
+from app.utils.datas import de_br, para_br
 
 FRACOES = [
     ("1.0", "Dia todo / ausente"),
@@ -32,24 +23,15 @@ def build(page: ft.Page) -> ft.Control:
     tr = tr_service.tr_por_data(hoje)
 
     if tr is None:
-        return ft.Container(padding=20, content=ft.Text("Sem TR ativo para hoje."))
+        return ft.Container(
+            padding=20, content=ft.Text("Sem TR ativo para hoje.")
+        )
 
-    campo_data = ft.TextField(
-        label="Data (DD/MM/AAAA)",
-        value=para_br(hoje),
-        read_only=True,
-        expand=True,
-    )
-
-    def abrir_calendario(e):
-        def ao_escolher(d):
-            campo_data.value = para_br(d)
-            page.update()
-        escolher_data(page, ao_escolher)
+    campo_data, linha_data = campo_data_picker(page, hoje)
 
     dropdown_tipo = ft.Dropdown(
         label="Tipo",
-        options=[ft.dropdown.Option(key=k, text=v) for k, v in TIPOS],
+        options=[ft.dropdown.Option(key=k, text=v) for k, v in TIPOS_EVENTO],
         value="reuniao",
     )
     dropdown_fracao = ft.Dropdown(
@@ -58,15 +40,17 @@ def build(page: ft.Page) -> ft.Control:
         value="0.5",
     )
     campo_obs = ft.TextField(label="Observação (opcional)")
-
     lista_eventos = ft.Column(spacing=8)
 
-    def carregar_eventos():
+    def carregar_eventos() -> None:
         lista_eventos.controls.clear()
         eventos = evento_service.listar_eventos_do_tr(tr)
         if not eventos:
             lista_eventos.controls.append(
-                ft.Text("Nenhum evento cadastrado neste TR.", color=ft.Colors.GREY_600)
+                ft.Text(
+                    "Nenhum evento cadastrado neste TR.",
+                    color=ft.Colors.GREY_600,
+                )
             )
             return
         for ev in eventos:
@@ -78,12 +62,23 @@ def build(page: ft.Page) -> ft.Control:
                 carregar_eventos()
                 page.update()
 
-            detalhes = [
-                ft.Row([
-                    ft.Text(para_br(ev.data), weight=ft.FontWeight.BOLD, size=14),
-                    chip_tipo_evento(ev.tipo),
-                ], spacing=8),
-                ft.Text(f"Duração: {ev.fracao}", size=12, color=ft.Colors.GREY_600),
+            detalhes: list[ft.Control] = [
+                ft.Row(
+                    [
+                        ft.Text(
+                            para_br(ev.data),
+                            weight=ft.FontWeight.BOLD,
+                            size=14,
+                        ),
+                        chip_tipo_evento(ev.tipo),
+                    ],
+                    spacing=8,
+                ),
+                ft.Text(
+                    f"Duração: {ev.fracao}",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                ),
             ]
             if ev.observacao:
                 detalhes.append(
@@ -99,7 +94,12 @@ def build(page: ft.Page) -> ft.Control:
                     content=ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Container(width=4, height=40, bgcolor=cor, border_radius=2),
+                            ft.Container(
+                                width=4,
+                                height=40,
+                                bgcolor=cor,
+                                border_radius=2,
+                            ),
                             ft.Column(detalhes, spacing=2, expand=True),
                             ft.IconButton(
                                 icon=ft.Icons.DELETE_OUTLINE,
@@ -112,11 +112,15 @@ def build(page: ft.Page) -> ft.Control:
                 )
             )
 
-    def salvar(e):
+    def salvar(e) -> None:
         try:
             d = de_br(campo_data.value)
         except ValueError:
-            snack(page, "Data inválida. Use o formato DD/MM/AAAA.", ft.Colors.RED_500)
+            snack(
+                page,
+                "Data inválida. Use o formato DD/MM/AAAA.",
+                ft.Colors.RED_500,
+            )
             return
 
         try:
@@ -124,18 +128,16 @@ def build(page: ft.Page) -> ft.Control:
         except (TypeError, ValueError):
             fracao = 1.0
 
-        evento_service.adicionar_evento(
-            d, dropdown_tipo.value, fracao, campo_obs.value.strip() or None
-        )
+        obs = (campo_obs.value or "").strip() or None
+        evento_service.adicionar_evento(d, dropdown_tipo.value, fracao, obs)
 
-        # Se for compensação, sugere lançar no banco de horas
         if dropdown_tipo.value == "compensacao":
-            _sugerir_lancamento_bh(page, d, fracao, campo_obs.value.strip() or None)
+            _sugerir_lancamento_bh(page, d, fracao, obs)
             campo_obs.value = ""
             carregar_eventos()
             page.update()
             return
-        
+
         snack(page, f"Evento salvo em {para_br(d)}.")
         campo_obs.value = ""
         carregar_eventos()
@@ -148,49 +150,58 @@ def build(page: ft.Page) -> ft.Control:
         controls=[
             ft.Container(
                 padding=20,
-                content=ft.Column([
-                    ft.Text("Calendário", size=22, weight=ft.FontWeight.BOLD),
-                    ft.Text(f"TR {tr.numero} — {para_br(tr.data_inicio)} a {para_br(tr.data_fim)}"),
-                    ft.Divider(),
-                    ft.Row([
-                        campo_data,
-                        ft.IconButton(
-                            icon=ft.Icons.CALENDAR_MONTH,
-                            tooltip="Escolher data",
-                            on_click=abrir_calendario,
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            "Calendário", size=22, weight=ft.FontWeight.BOLD
                         ),
-                    ], spacing=4),
-                    dropdown_tipo,
-                    dropdown_fracao,
-                    campo_obs,
-                    ft.Button("Adicionar evento", on_click=salvar),
-                    ft.Divider(),
-                    ft.Text("Eventos do TR", weight=ft.FontWeight.BOLD),
-                    lista_eventos,
-                ]),
+                        ft.Text(
+                            f"TR {tr.numero} — {para_br(tr.data_inicio)} a {para_br(tr.data_fim)}"
+                        ),
+                        ft.Divider(),
+                        linha_data,
+                        dropdown_tipo,
+                        dropdown_fracao,
+                        campo_obs,
+                        ft.Button("Adicionar evento", on_click=salvar),
+                        ft.Divider(),
+                        ft.Text("Eventos do TR", weight=ft.FontWeight.BOLD),
+                        lista_eventos,
+                    ]
+                ),
             )
         ],
     )
 
-def _sugerir_lancamento_bh(page: ft.Page, d, fracao: float, obs: str | None):
-    """Depois de registrar um evento de compensação, sugere lançar no BH."""
-    from app.services import banco_horas_service
 
+def _sugerir_lancamento_bh(
+    page: ft.Page,
+    d: date,
+    fracao: float,
+    obs: str | None,
+) -> None:
+    """Depois de registrar um evento de compensação, sugere lançar no BH."""
     horas = fracao * 8.0
 
     def confirmar(ev):
         page.pop_dialog()
         try:
             banco_horas_service.adicionar(
-                d, horas, "compensacao",
+                d,
+                horas,
+                "compensacao",
                 obs or "Folga referente ao banco de horas",
             )
-            snack(page, f"Lançado no BH: −{banco_horas_service.formatar_horas(horas)}.")
+            atualizar_hdr = getattr(page, "_atualizar_header_bh", None)
+            if callable(atualizar_hdr):
+                atualizar_hdr()
+            snack(
+                page,
+                f"Lançado no BH: −{banco_horas_service.formatar_horas(horas)}.",
+            )
+            page.update()
         except Exception as ex:
             snack(page, f"Erro ao lançar no BH: {ex}", ft.Colors.RED_500)
-
-    def ignorar(ev):
-        page.pop_dialog()
 
     dialog = ft.AlertDialog(
         title=ft.Text("Lançar no banco de horas?"),
@@ -199,7 +210,7 @@ def _sugerir_lancamento_bh(page: ft.Page, d, fracao: float, obs: str | None):
             f"({fracao:.2f} dia) de compensação. Deseja lançar também no banco de horas?"
         ),
         actions=[
-            ft.TextButton("Não", on_click=ignorar),
+            ft.TextButton("Não", on_click=lambda ev: page.pop_dialog()),
             ft.Button("Sim, lançar", on_click=confirmar),
         ],
     )

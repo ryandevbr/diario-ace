@@ -1,14 +1,15 @@
 from datetime import date, datetime
+from typing import Callable
 import flet as ft
 
 
 def para_br(d: date) -> str:
-    """date → 'DD/MM/AAAA'."""
+    """Converte date para string 'DD/MM/AAAA'."""
     return d.strftime("%d/%m/%Y")
 
 
 def de_br(s: str) -> date:
-    """'DD/MM/AAAA' → date. Levanta ValueError se inválido."""
+    """Converte string 'DD/MM/AAAA' para date. Levanta ValueError se inválido."""
     return datetime.strptime(s.strip(), "%d/%m/%Y").date()
 
 
@@ -24,10 +25,12 @@ def obter_date_picker(page: ft.Page) -> ft.DatePicker:
         page._date_picker_registrado = True
     return page._date_picker
 
+
 def bairro_label(bairro: dict | None) -> str:
     return bairro["nome"] if bairro else "—"
 
-def escolher_data(page: ft.Page, callback) -> None:
+
+def escolher_data(page: ft.Page, callback: Callable[[date], None]) -> None:
     """Abre o DatePicker. O callback recebe um datetime.date."""
     picker = obter_date_picker(page)
 

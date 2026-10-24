@@ -1,60 +1,44 @@
 from datetime import date, datetime
-import csv
 from pathlib import Path
 
-try:
-    import openpyxl
-except ImportError:
-    openpyxl = None
-
-from app.database import get_conn
-from app.services import bairro_service, atividade_service
+from app.database import db_session
+from app.services import atividade_service, tr_service
+from app.utils.planilha import (
+    encontrar_coluna,
+    ler_tabela_arquivo,
+    parse_data_planilha,
+    valor_vazio,
+)
 
 
 class ImportacaoErro(Exception):
     """Erro controlado durante a leitura/importação da planilha."""
-    pass
 
 
-# ---------- Aliases de cabeçalho ----------
-ALIASES_DATA       = ("data", "dt", "dia", "date")
-ALIASES_TOTAL      = ("total t", "total", "produção", "producao",
-                      "quantidade", "imóveis", "imoveis")
-ALIASES_BAIRRO     = ("bairro", "bairros", "localidade")
-ALIASES_ATIVIDADE  = ("atividade", "tipo de atividade", "tipo")
-ALIASES_FECHADOS   = ("fechados", "fechado", "casas fechadas")
+ALIASES_DATA = ("data", "dt", "dia", "date")
+ALIASES_TOTAL = (
+    "total t",
+    "total",
+    "produção",
+    "producao",
+    "quantidade",
+    "imóveis",
+    "imoveis",
+)
+ALIASES_BAIRRO = ("bairro", "bairros", "localidade")
+ALIASES_ATIVIDADE = ("atividade", "tipo de atividade", "tipo")
+ALIASES_FECHADOS = ("fechados", "fechado", "casas fechadas")
 ALIASES_RESGATADOS = ("resgates", "resgatados", "resgate")
-ALIASES_RECUSADOS  = ("recusas", "recusados", "recusa")
-ALIASES_PENDENCIA  = ("pendência", "pendencia", "pendências", "pendencias")
-ALIASES_OBS        = ("observações", "observacao", "observação", "obs",
-                      "comentário", "comentario")
-
-
-def _normalizar(s: str) -> str:
-    return s.strip().lower()
-
-
-def _encontrar_coluna(headers: list[str], aliases) -> str | None:
-    mapa = {_normalizar(h): h for h in headers if h}
-    for alias in aliases:
-        if alias in mapa:
-            return mapa[alias]
-    return None
-
-
-def _parse_data(valor) -> date:
-    if isinstance(valor, datetime):
-        return valor.date()
-    if isinstance(valor, date):
-        return valor
-    if isinstance(valor, str):
-        s = valor.strip()
-        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y"):
-            try:
-                return datetime.strptime(s, fmt).date()
-            except ValueError:
-                continue
-    raise ImportacaoErro(f"Data inválida: {valor!r}")
+ALIASES_RECUSADOS = ("recusas", "recusados", "recusa")
+ALIASES_PENDENCIA = ("pendência", "pendencia", "pendências", "pendencias")
+ALIASES_OBS = (
+    "observações",
+    "observacao",
+    "observação",
+    "obs",
+    "comentário",
+    "comentario",
+)
 
 
 def _parse_int(valor, campo: str) -> int:
@@ -62,8 +46,8 @@ def _parse_int(valor, campo: str) -> int:
         return 0
     try:
         return int(float(valor))
-    except (TypeError, ValueError):
-        raise ImportacaoErro(f"{campo} inválido: {valor!r}")
+    except (TypeError, ValueError) as ex:
+        raise ImportacaoErro(f"{campo} inválido: {valor!r}") from ex
 
 
 def _parse_texto(valor) -> str | None:
@@ -74,15 +58,15 @@ def _parse_texto(valor) -> str | None:
 
 
 def _extrair_linhas(headers, dados_iter, getter, by_index: bool) -> list[dict]:
-    col_data = _encontrar_coluna(headers, ALIASES_DATA)
-    col_total = _encontrar_coluna(headers, ALIASES_TOTAL)
-    col_bairro = _encontrar_coluna(headers, ALIASES_BAIRRO)
-    col_atividade = _encontrar_coluna(headers, ALIASES_ATIVIDADE)
-    col_fechados = _encontrar_coluna(headers, ALIASES_FECHADOS)
-    col_resgatados = _encontrar_coluna(headers, ALIASES_RESGATADOS)
-    col_recusados = _encontrar_coluna(headers, ALIASES_RECUSADOS)
-    col_pendencia = _encontrar_coluna(headers, ALIASES_PENDENCIA)
-    col_obs = _encontrar_coluna(headers, ALIASES_OBS)
+    col_data = encontrar_coluna(headers, ALIASES_DATA)
+    col_total = encontrar_coluna(headers, ALIASES_TOTAL)
+    col_bairro = encontrar_coluna(headers, ALIASES_BAIRRO)
+    col_atividade = encontrar_coluna(headers, ALIASES_ATIVIDADE)
+    col_fechados = encontrar_coluna(headers, ALIASES_FECHADOS)
+    col_resgatados = encontrar_coluna(headers, ALIASES_RESGATADOS)
+    col_recusados = encontrar_coluna(headers, ALIASES_RECUSADOS)
+    col_pendencia = encontrar_coluna(headers, ALIASES_PENDENCIA)
+    col_obs = encontrar_coluna(headers, ALIASES_OBS)
 
     if not col_data:
         raise ImportacaoErro(
@@ -95,46 +79,38 @@ def _extrair_linhas(headers, dados_iter, getter, by_index: bool) -> list[dict]:
             f"'Quantidade'). Colunas encontradas: {headers}"
         )
 
-    if by_index:
-        idx = {c: headers.index(c) for c in
-               [col_data, col_total, col_bairro, col_atividade,
-                col_fechados, col_resgatados, col_recusados,
-                col_pendencia, col_obs] if c}
-    else:
-        idx = {c: c for c in
-               [col_data, col_total, col_bairro, col_atividade,
-                col_fechados, col_resgatados, col_recusados,
-                col_pendencia, col_obs] if c}
+    todas_colunas = [
+        col_data,
+        col_total,
+        col_bairro,
+        col_atividade,
+        col_fechados,
+        col_resgatados,
+        col_recusados,
+        col_pendencia,
+        col_obs,
+    ]
+    idx = (
+        {c: headers.index(c) for c in todas_colunas if c}
+        if by_index
+        else {c: c for c in todas_colunas if c}
+    )
 
     def val(row, col):
-        if col is None:
-            return None
-        return getter(row, idx[col])
-
-    def linha_vazia(row) -> bool:
-        for c in [col_data, col_total, col_bairro, col_atividade,
-                  col_fechados, col_resgatados, col_recusados,
-                  col_pendencia, col_obs]:
-            v = val(row, c)
-            if v is None:
-                continue
-            if isinstance(v, str) and not v.strip():
-                continue
-            return False
-        return True
+        return None if col is None else getter(row, idx[col])
 
     resultado = []
     for i, row in enumerate(dados_iter, start=2):
-        if linha_vazia(row):
+        if all(valor_vazio(val(row, c)) for c in todas_colunas):
             continue
         try:
-            d = _parse_data(val(row, col_data))
+            d = parse_data_planilha(val(row, col_data), ImportacaoErro)
             total = _parse_int(val(row, col_total), "Total T")
             fechados = _parse_int(val(row, col_fechados), "Fechados")
             resgatados = _parse_int(val(row, col_resgatados), "Resgates")
             recusados = _parse_int(val(row, col_recusados), "Recusas")
         except ImportacaoErro as ex:
-            raise ImportacaoErro(f"Linha {i}: {ex}")
+            raise ImportacaoErro(f"Linha {i}: {ex}") from ex
 
         bairro = _parse_texto(val(row, col_bairro))
         atividade = atividade_service.normalizar(
@@ -143,7 +119,6 @@ def _extrair_linhas(headers, dados_iter, getter, by_index: bool) -> list[dict]:
         pendencia = _parse_texto(val(row, col_pendencia))
         obs = _parse_texto(val(row, col_obs))
 
-        # Junta Pendência com Observação, sem duplicar
         if pendencia and obs:
             observacao = f"{pendencia} — {obs}"
         elif pendencia:
@@ -151,80 +126,44 @@ def _extrair_linhas(headers, dados_iter, getter, by_index: bool) -> list[dict]:
         else:
             observacao = obs
 
-        resultado.append({
-            "data": d,
-            "quantidade": total,
-            "bairro": bairro,
-            "atividade": atividade,
-            "fechados": fechados,
-            "resgatados": resgatados,
-            "recusados": recusados,
-            "observacao": observacao,
-        })
+        resultado.append(
+            {
+                "data": d,
+                "quantidade": total,
+                "bairro": bairro,
+                "atividade": atividade,
+                "fechados": fechados,
+                "resgatados": resgatados,
+                "recusados": recusados,
+                "observacao": observacao,
+            }
+        )
     return resultado
 
 
-def _ler_csv(caminho: Path) -> list[dict]:
-    # Detecta delimitador (vírgula ou ponto e vírgula)
-    with open(caminho, "r", encoding="utf-8-sig", newline="") as f:
-        amostra = f.read(4096)
-        f.seek(0)
-        try:
-            dialecto = csv.Sniffer().sniff(amostra, delimiters=",;")
-        except csv.Error:
-            dialecto = csv.excel
-        leitor = csv.DictReader(f, dialect=dialecto)
-        headers = leitor.fieldnames or []
-        return _extrair_linhas(
-            headers, leitor,
-            getter=lambda row, h: row.get(h),
-            by_index=False,
-        )
-
-
-def _ler_xlsx(caminho: Path) -> list[dict]:
-    if openpyxl is None:
-        raise ImportacaoErro("openpyxl não instalado. Rode: pip install openpyxl")
-    wb = openpyxl.load_workbook(caminho, data_only=True, read_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    wb.close()
-    if not rows:
-        return []
-    headers = [str(c) if c is not None else "" for c in rows[0]]
-    dados = rows[1:]
-    return _extrair_linhas(
-        headers, dados,
-        getter=lambda row, i: row[i] if i < len(row) else None,
-        by_index=True,
-    )
-
-
-def ler_planilha(caminho) -> list[dict]:
+def ler_planilha(caminho: str | Path) -> list[dict]:
     """Lê o arquivo e devolve lista de dicts com os dados de produção."""
-    caminho = Path(caminho)
-    sufixo = caminho.suffix.lower()
-    if sufixo == ".csv":
-        return _ler_csv(caminho)
-    if sufixo in (".xlsx", ".xlsm"):
-        return _ler_xlsx(caminho)
-    raise ImportacaoErro(
-        f"Formato não suportado: {sufixo}. Use .csv, .xlsx ou .xlsm."
-    )
+    return ler_tabela_arquivo(caminho, _extrair_linhas, ImportacaoErro)
 
 
 def importar_linhas(linhas: list[dict]) -> dict:
-    """Insere/atualiza as produções. Cria bairros conforme necessário."""
-    from app.services import tr_service
+    """Insere/atualiza as produções em lote usando uma única transação."""
+    todos_trs = tr_service.listar_todos_trs()
 
     inseridos = 0
     atualizados = 0
     ignorados: list[tuple[str, str]] = []
     bairros_criados: set[str] = set()
 
-    conn = get_conn()
-    try:
+    with db_session(commit=True) as conn:
+        cur = conn.cursor()
         agora = datetime.now().isoformat()
+
+        bairros_cache: dict[str, int] = {
+            r["nome"].lower(): r["id"]
+            for r in cur.execute("SELECT id, nome FROM bairro").fetchall()
+        }
+
         for linha in linhas:
             d: date = linha["data"]
             qtd: int = linha["quantidade"]
@@ -235,46 +174,73 @@ def importar_linhas(linhas: list[dict]) -> dict:
             resgatados: int = linha.get("resgatados", 0) or 0
             recusados: int = linha.get("recusados", 0) or 0
 
-            tr = tr_service.tr_por_data(d)
+            tr = next(
+                (t for t in todos_trs if t.data_inicio <= d <= t.data_fim),
+                None,
+            )
             if tr is None:
                 ignorados.append((d.isoformat(), "fora de qualquer TR"))
                 continue
 
             bairro_id = None
             if bairro_nome:
-                existente_b = bairro_service.buscar_por_nome(bairro_nome)
-                if existente_b:
-                    bairro_id = existente_b["id"]
+                nome_limpo = bairro_nome.strip()
+                chave_b = nome_limpo.lower()
+                if chave_b in bairros_cache:
+                    bairro_id = bairros_cache[chave_b]
                 else:
-                    bairro_id = bairro_service.criar(bairro_nome)
-                    bairros_criados.add(bairro_nome)
+                    cur.execute(
+                        "INSERT INTO bairro (nome, ativo, criado_em) VALUES (?, 1, ?)",
+                        (nome_limpo, agora),
+                    )
+                    bairro_id = int(cur.lastrowid)
+                    bairros_cache[chave_b] = bairro_id
+                    bairros_criados.add(nome_limpo)
 
-            existente = conn.execute(
+            existente = cur.execute(
                 "SELECT id FROM producao WHERE data=?", (d.isoformat(),)
             ).fetchone()
 
             if existente:
-                conn.execute(
+                cur.execute(
                     "UPDATE producao SET quantidade=?, tr_id=?, bairro_id=?, "
                     "atividade=?, fechados=?, resgatados=?, recusados=?, "
                     "observacao=?, atualizado_em=? WHERE id=?",
-                    (qtd, tr.id, bairro_id, atividade, fechados, resgatados,
-                     recusados, obs, agora, existente["id"]),
+                    (
+                        qtd,
+                        tr.id,
+                        bairro_id,
+                        atividade,
+                        fechados,
+                        resgatados,
+                        recusados,
+                        obs,
+                        agora,
+                        existente["id"],
+                    ),
                 )
                 atualizados += 1
             else:
-                conn.execute(
+                cur.execute(
                     "INSERT INTO producao (data, tr_id, bairro_id, atividade, "
                     "quantidade, fechados, resgatados, recusados, "
                     "observacao, criado_em, atualizado_em) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (d.isoformat(), tr.id, bairro_id, atividade, qtd,
-                     fechados, resgatados, recusados, obs, agora, agora),
+                    (
+                        d.isoformat(),
+                        tr.id,
+                        bairro_id,
+                        atividade,
+                        qtd,
+                        fechados,
+                        resgatados,
+                        recusados,
+                        obs,
+                        agora,
+                        agora,
+                    ),
                 )
                 inseridos += 1
-        conn.commit()
-    finally:
-        conn.close()
 
     return {
         "inseridos": inseridos,
