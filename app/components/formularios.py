@@ -5,12 +5,14 @@ from app.services import bairro_service
 from app.utils.share import compartilhar_arquivo
 import sys
 
+
 def criar_campos_producao(
     page: ft.Page,
     bairros: list[dict],
     atividades: list[str],
     valores_iniciais: dict[str, Any] | None = None,
     label_qtd: str = "Imóveis trabalhados",
+    on_bairro_change: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
     """Cria e devolve os controles padronizados de formulário de produção."""
     valores = valores_iniciais or {}
@@ -38,6 +40,15 @@ def criar_campos_producao(
         ],
         value=bairro_padrao,
     )
+
+    # --- Lógica para salvar o bairro selecionado ---
+    def _bairro_alterado(e):
+        if dropdown_bairro.value and on_bairro_change:
+            on_bairro_change(int(dropdown_bairro.value))
+        _atualizar_estado_croqui(e) # Chama a atualização do botão do croqui
+
+    dropdown_bairro.on_select = _bairro_alterado
+    # ----------------------------------------------
     
     # --- Início da lógica do Croqui ---
     btn_croqui = ft.Button(
@@ -66,31 +77,66 @@ def criar_campos_producao(
             
             async def abrir_croqui(ev):
                 try:
-                    # 1. Windows: Abre direto no leitor de PDF padrão
-                    if sys.platform == "win32":
-                        os.startfile(croqui_path)
-                    
-                    # 2. Android/iOS: Abre o menu de compartilhamento do sistema
-                    elif sys.platform in ("android", "ios") or "ANDROID_ARGUMENT" in os.environ:
-                        ok = await compartilhar_arquivo(
-                            page, 
-                            croqui_path, 
-                            mime_type="application/pdf", 
-                            texto=f"Croqui - {b_info.get('nome', '')}"
-                        )
-                        if not ok:
-                            from app.components.ui import snack
-                            snack(page, "Não foi possível abrir o arquivo.", ft.Colors.RED_500)
-                    
-                    # 3. Linux/Mac
-                    else:
-                        cmd = "open" if sys.platform == "darwin" else "xdg-open"
-                        os.system(f"{cmd} '{croqui_path}'")
-                        
+                    if croqui_path.lower().endswith(".pdf"):
+                        if sys.platform == "win32":
+                            os.startfile(croqui_path)
+                        else:
+                            from app.utils.share import compartilhar_arquivo
+                            await compartilhar_arquivo(page, croqui_path, "application/pdf", "Abrir Croqui")
+                        return
+
+                    def fechar_img(e):
+                        page.pop_dialog()
+                        page.update()
+
+                    # InteractiveViewer permite zoom e pan na imagem
+                    imagem_zoom = ft.InteractiveViewer(
+                        content=ft.Image(
+                            src=croqui_path,
+                            fit=ft.BoxFit.CONTAIN,
+                        ),
+                        boundary_margin=ft.Margin.all(20),
+                        min_scale=0.5,
+                        max_scale=5.0,
+                        expand=True,
+                    )
+
+                    # Usa AlertDialog (que possui on_dismiss) em vez de Container
+                    dialog_img = ft.AlertDialog(
+                        content_padding=0,
+                        title_padding=0,
+                        actions_padding=0,
+                        inset_padding=0,
+                        content=ft.Container(
+                            content=ft.Column([
+                                ft.Row([
+                                    ft.IconButton(
+                                        icon=ft.Icons.CLOSE,
+                                        icon_color=ft.Colors.WHITE,
+                                        on_click=fechar_img,
+                                    ),
+                                    ft.Text(
+                                        f"Croqui - {b_info.get('nome', '')}",
+                                        size=16,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=ft.Colors.WHITE,
+                                    ),
+                                ], spacing=10),
+                                imagem_zoom,
+                            ], expand=True),
+                            bgcolor=ft.Colors.BLACK,
+                            expand=True,
+                            padding=10,
+                        ),
+                    )
+
+                    page.show_dialog(dialog_img)
+                    page.update()
+
                 except Exception as ex:
-                    print(f"Erro ao abrir: {ex}")
+                    print(f"Erro ao abrir croqui: {ex}")
                     from app.components.ui import snack
-                    snack(page, f"Erro ao abrir arquivo: {ex}", ft.Colors.RED_500)
+                    snack(page, f"Erro ao abrir imagem: {ex}", ft.Colors.RED_500)
             
             btn_croqui.on_click = abrir_croqui
         else:

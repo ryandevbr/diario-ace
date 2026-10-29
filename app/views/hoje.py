@@ -13,12 +13,14 @@ from app.components.ui import (
     kpi,
     snack,
 )
+
 from app.services import (
     atividade_service,
     bairro_service,
     evento_service,
     producao_service,
     tr_service,
+    config_service,
 )
 from app.services.meta_service import meta_do_dia
 from app.utils.datas import para_br
@@ -76,13 +78,35 @@ def build(page: ft.Page) -> ft.Control:
             )
             icone_meta = ft.Icons.TRENDING_UP
 
+        
         bairros = bairro_service.listar_ativos()
         atividades = atividade_service.listar()
+        
+        # 1. Recupera o último bairro usado (padrão é o primeiro da lista ou None)
+        bairro_salvo_str = config_service.obter("ultimo_bairro_hoje")
+        bairro_salvo_id = int(bairro_salvo_str) if bairro_salvo_str else None
+
+        # Prepara os valores iniciais
+        if prod_hoje:
+            valores_iniciais = prod_hoje
+        else:
+            valores_iniciais = {"quantidade": produzido_hoje}
+            
+        # Se o usuário já tinha produção hoje, o prod_hoje manda. 
+        # Se não, usamos o último bairro salvo.
+        if not valores_iniciais.get("bairro_id") and bairro_salvo_id:
+            valores_iniciais["bairro_id"] = bairro_salvo_id
+
+        # 2. Função que será chamada quando o bairro mudar
+        def ao_mudar_bairro(b_id: int):
+            config_service.definir("ultimo_bairro_hoje", str(b_id))
+
         campos = criar_campos_producao(
             page,
             bairros,
             atividades,
-            valores_iniciais=prod_hoje or {"quantidade": produzido_hoje},
+            valores_iniciais=valores_iniciais,
+            on_bairro_change=ao_mudar_bairro, # <-- Passa a função para o formulário
         )
 
         def persistir_valores_atuais() -> int:

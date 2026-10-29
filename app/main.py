@@ -1,5 +1,7 @@
+import asyncio
 from datetime import date
 import logging
+import os
 from pathlib import Path
 import sys
 from typing import Callable
@@ -8,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import flet as ft
 
-from app.components.ui import resolver_theme_mode
+from app.components.ui import resolver_theme_mode, snack
 from app.database import init_db
 from app.services import (
     backup_service,
@@ -16,10 +18,30 @@ from app.services import (
     config_service,
     producao_service,
     tr_service,
+    update_service,
 )
+from app.utils.share import compartilhar_arquivo
 from app.views import calendario, config, historico, hoje, meu_tr, recuperacao
 
 logger = logging.getLogger(__name__)
+
+def _obter_build_atual(padrao: int = 11) -> int:
+    """Lê o build_number do pyproject.toml para manter sincronizado."""
+    try:
+        import tomllib
+
+        caminho_toml = Path(__file__).resolve().parent / "pyproject.toml"
+        with open(caminho_toml, "rb") as f:
+            dados = tomllib.load(f)
+        return int(
+            dados.get("tool", {}).get("flet", {}).get("build_number", padrao)
+        )
+    except Exception:
+        return padrao
+
+
+BUILD_ATUAL = _obter_build_atual()
+MIME_APK = "application/vnd.android.package-archive"
 
 RENDERIZADORES_ABA = (
     hoje.build,
@@ -31,7 +53,134 @@ RENDERIZADORES_ABA = (
 )
 
 
-def main(page: ft.Page) -> None:
+async def _abrir_instalador_apk(page: ft.Page, caminho_apk: str):
+    """Abre o instalador de pacotes do Android usando Share (FileProvider)."""
+    try:
+        from app.utils.share import compartilhar_arquivo
+        
+        ok = await compartilhar_arquivo(
+            page, 
+            caminho_apk, 
+            mime_type="application/vnd.android.package-archive",
+            texto="Instalar atualização do Diário ACE"
+        )
+        if not ok:
+            from app.components.ui import snack
+            snack(page, "Não foi possível abrir o instalador.", ft.Colors.RED_500)
+    except Exception as ex:
+        print(f"Erro ao abrir instalador: {ex}")
+        from app.components.ui import snack
+        snack(page, f"Erro: {ex}", ft.Colors.RED_500)
+
+
+def checar_atualizacao(page: ft.Page) -> None:
+    """Verifica na inicialização se há nova versão disponível (apenas no Android)."""
+    es_android = (
+        os.environ.get("FLET_PLATFORM", "").lower() == "android"
+        or update_service.eh_android()
+    )
+    if not es_android:
+        print("Checagem de atualização ignorada no desktop.")
+        return
+
+    async def _executar_checagem() -> None:
+        dados = await asyncio.to_thread(
+            update_service.verificar_atualizacao, build_atual=BUILD_ATUAL
+        )
+        if not dados:
+            return
+
+        await asyncio.sleep(0.1)
+
+        changelog = (dados.get("changelog") or "Melhorias e correções.").strip()
+        texto_aviso = (
+            f"Nova versão disponível!\n\n{changelog}\n\nDeseja atualizar agora?"
+        )
+        texto_progresso = ft.Text(
+            "Baixando atualização... Aguarde.",
+            size=13,
+            text_align=ft.TextAlign.CENTER,
+        )
+
+        async def confirmar_atualizacao(ev) -> None:
+            dialog.modal = True
+            dialog.actions = []
+            dialog.content = ft.Column(
+                [
+                    ft.ProgressRing(),
+                    texto_progresso,
+                ],
+                tight=True,
+                spacing=14,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            page.update()
+
+            ultimo_mb_exibido = {"valor": -1}
+
+            def ao_progresso(baixado: int, total: int) -> None:
+                mb_atual = baixado // (1024 * 1024)
+                if mb_atual == ultimo_mb_exibido["valor"] and baixado != total:
+                    return
+                ultimo_mb_exibido["valor"] = mb_atual
+                mb_fmt = baixado / (1024 * 1024)
+                if total > 0:
+                    total_fmt = total / (1024 * 1024)
+                    pct = int((baixado / total) * 100)
+                    texto_progresso.value = (
+                        f"Baixando atualização... {pct}% "
+                        f"({mb_fmt:.1f} / {total_fmt:.1f} MB)"
+                    )
+                else:
+                    texto_progresso.value = (
+                        f"Baixando atualização... ({mb_fmt:.1f} MB)"
+                    )
+                try:
+                    page.update()
+                except Exception:
+                    pass
+
+            try:
+                destino = await asyncio.to_thread(
+                    update_service.obter_destino_apk
+                )
+                caminho_apk = await asyncio.to_thread(
+                    update_service.baixar_apk,
+                    dados["apk_url"],
+                    str(destino),
+                    on_progress=ao_progresso,
+                )
+                page.pop_dialog()
+                page.update()
+                await _abrir_instalador_apk(page, caminho_apk)
+            except Exception as ex:
+                logger.warning("Erro durante atualização do app: %s", ex)
+                try:
+                    page.pop_dialog()
+                    page.update()
+                except Exception:
+                    pass
+                snack(
+                    page,
+                    f"Erro ao baixar atualização: {ex}",
+                    ft.Colors.RED_500,
+                )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Atualização disponível"),
+            content=ft.Text(texto_aviso),
+            actions=[
+                ft.TextButton("Não", on_click=lambda ev: page.pop_dialog()),
+                ft.Button("Sim", on_click=confirmar_atualizacao),
+            ],
+        )
+        page.show_dialog(dialog)
+
+    page.run_task(_executar_checagem)
+
+
+def main(page: ft.Page):
+    page.window.prevent_close = True
     page.title = "Controle ACE"
     page.padding = 0
 
@@ -58,6 +207,24 @@ def main(page: ft.Page) -> None:
 
     body = ft.Container(expand=True)
     header_bh = ft.Text("", size=11, color=ft.Colors.GREY_500)
+    
+    # Título que muda dinamicamente no cabeçalho
+    titulo_header = ft.Text(
+        "Diário ACE",
+        weight=ft.FontWeight.BOLD,
+        color=ft.Colors.TEAL_700,
+        size=16,
+    )
+
+    # Lista de abas para o menu lateral
+    abas = [
+        (0, "Hoje", ft.Icons.TODAY),
+        (1, "Meu TR", ft.Icons.INSIGHTS),
+        (2, "Calendário", ft.Icons.CALENDAR_MONTH),
+        (3, "Histórico", ft.Icons.HISTORY),
+        (4, "Recuperação", ft.Icons.LOCATION_ON),
+        (5, "Configurações", ft.Icons.SETTINGS),
+    ]
 
     def atualizar_header_bh() -> None:
         try:
@@ -82,7 +249,13 @@ def main(page: ft.Page) -> None:
             else config.build
         )
         body.content = construtor(page)
-        page.navigation_bar.selected_index = idx
+        
+        # Atualiza o título no cabeçalho com o nome da aba
+        for i, label, _ in abas:
+            if i == idx:
+                titulo_header.value = label
+                break
+
         atualizar_header_bh()
         page.update()
 
@@ -160,17 +333,54 @@ def main(page: ft.Page) -> None:
             lambda: page.window.destroy(),
         )
 
-    def on_nav(e) -> None:
-        idx = page.navigation_bar.selected_index
-        atual = getattr(page, "_current_tab", 0)
+    # --- Lógica do Menu Lateral (Drawer) ---
+    async def abrir_menu(e) -> None:
+        # A função correta na v1.0 é show_drawer()
+        await page.show_drawer()
 
+    async def selecionar_aba_menu(e) -> None:
+        # A função correta na v1.0 é close_drawer()
+        await page.close_drawer()
+        
+        idx = e.control.selected_index
+        atual = getattr(page, "_current_tab", 0)
         if atual == 0 and idx != 0 and _tem_alteracao_nao_salva():
-            page.navigation_bar.selected_index = atual
-            page.update()
             _pedir_confirmacao_troca_aba(idx)
             return
 
         _trocar_aba(idx)
+
+    page.drawer = ft.NavigationDrawer(
+        on_change=selecionar_aba_menu,
+        controls=[
+            ft.Container(
+                padding=20,
+                content=ft.Column([
+                    ft.Text("Diário ACE", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.TEAL_700),
+                    ft.Text("Agente de Combate a Endemias", size=12, color=ft.Colors.GREY_500),
+                ], spacing=2)
+            ),
+            ft.Divider(),
+            *[
+                ft.NavigationDrawerDestination(
+                    icon=icone,
+                    label=label,
+                )
+                for _, label, icone in abas
+            ],
+            ft.Divider(),
+            ft.Container(
+                padding=10,
+                content=ft.TextButton(
+                    "Sair do App",
+                    icon=ft.Icons.LOGOUT,
+                    icon_color=ft.Colors.RED_500,
+                    style=ft.ButtonStyle(color=ft.Colors.RED_500),
+                    on_click=lambda e: _tentar_sair(),
+                )
+            )
+        ],
+    )
 
     def _pode_sair_do_app() -> bool:
         atual = getattr(page, "_current_tab", 0)
@@ -197,22 +407,24 @@ def main(page: ft.Page) -> None:
         _pedir_confirmacao_fechar_app()
         return True
 
+    # Cabeçalho atualizado com o botão de Menu (hambúrguer)
     header = ft.Container(
         bgcolor=ft.Colors.SURFACE,
-        padding=ft.Padding.symmetric(horizontal=16, vertical=10),
+        padding=ft.Padding.symmetric(horizontal=8, vertical=8),
         content=ft.Row(
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             controls=[
-                ft.Text(
-                    "Diário ACE",
-                    weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.TEAL_700,
-                    size=14,
-                ),
+                ft.Row([
+                    ft.IconButton(
+                        icon=ft.Icons.MENU,
+                        icon_color=ft.Colors.TEAL_700,
+                        on_click=abrir_menu, # O Flet executa funções async automaticamente
+                    ),
+                    titulo_header,
+                ], spacing=0),
                 ft.Row(
                     [
                         header_bh,
-                        ft.TextButton("Sair", on_click=lambda e: _tentar_sair()),
                     ],
                     spacing=8,
                 ),
@@ -220,50 +432,16 @@ def main(page: ft.Page) -> None:
         ),
     )
 
-    page.navigation_bar = ft.NavigationBar(
-        selected_index=0,
-        indicator_color=ft.Colors.TEAL_100,
-        destinations=[
-            ft.NavigationBarDestination(
-                icon=ft.Icons.TODAY_OUTLINED,
-                selected_icon=ft.Icons.TODAY,
-                label="Hoje",
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.INSIGHTS_OUTLINED,
-                selected_icon=ft.Icons.INSIGHTS,
-                label="Meu TR",
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.CALENDAR_MONTH_OUTLINED,
-                selected_icon=ft.Icons.CALENDAR_MONTH,
-                label="Calendário",
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.HISTORY_OUTLINED,
-                selected_icon=ft.Icons.HISTORY,
-                label="Histórico",
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.LOCATION_ON_OUTLINED,
-                selected_icon=ft.Icons.LOCATION_ON,
-                label="Recuperação",
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.SETTINGS_OUTLINED,
-                selected_icon=ft.Icons.SETTINGS,
-                label="Config",
-            ),
-        ],
-        on_change=on_nav,
-    )
-
-    page.window.prevent_close = True
     page.window.on_event = on_window_event
     page.on_view_pop = on_view_pop
 
+    # Inicializa a tela Hoje
+    page._current_tab = 0
     body.content = hoje.build(page)
+    titulo_header.value = "Hoje"
     atualizar_header_bh()
+
+    checar_atualizacao(page)
 
     page.add(
         ft.Column(

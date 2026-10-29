@@ -143,13 +143,13 @@ def obter_diretorio_croquis_publico() -> Path | None:
 
 
 def salvar_croqui(bairro_id: int, caminho_origem: str) -> str:
-    """Copia o PDF para a pasta privada (e pública no Android) e atualiza o banco."""
     origem = Path(caminho_origem)
-    if not origem.exists() or origem.suffix.lower() != ".pdf":
-        raise ValueError("Arquivo inválido. Selecione um PDF.")
-
-    nome_arquivo = f"croqui_{bairro_id}.pdf"
-    destino = obter_diretorio_croquis() / nome_arquivo
+    if not origem.exists() or origem.suffix.lower() not in [".pdf", ".jpg", ".jpeg", ".png"]:
+        raise ValueError("Arquivo inválido. Selecione um PDF ou Imagem.")
+    
+    # Mantém a extensão original do arquivo (jpg, png ou pdf)
+    extensao = origem.suffix.lower()
+    destino = obter_diretorio_croquis() / f"croqui_{bairro_id}{extensao}"
 
     if origem.resolve() != destino.resolve():
         shutil.copy2(origem, destino)
@@ -158,7 +158,7 @@ def salvar_croqui(bairro_id: int, caminho_origem: str) -> str:
     pasta_pub = obter_diretorio_croquis_publico()
     if pasta_pub:
         try:
-            destino_pub = pasta_pub / nome_arquivo
+            destino_pub = pasta_pub / destino.name
             if origem.resolve() != destino_pub.resolve():
                 shutil.copy2(destino, destino_pub)
         except Exception as ex:

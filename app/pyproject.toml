@@ -11,7 +11,6 @@ dependencies = [
     "flet>=1.0.0",
     "reportlab>=4.0.0",
     "openpyxl>=3.1.0",
-    "certifi>=2025.6.15",
 ]
 
 [tool.flet]
@@ -20,10 +19,11 @@ product = "Diário ACE"
 company = "Ryan Lucas"
 copyright = "© 2026"
 app_id = "com.yferms.diarioace"
-build_number = 10
+build_number = 11
 
 [tool.flet.app]
 
 [tool.flet.android.permission]
+"android.permission.REQUEST_INSTALL_PACKAGES" = true
 "android.permission.WRITE_EXTERNAL_STORAGE" = true
 "android.permission.READ_EXTERNAL_STORAGE" = true

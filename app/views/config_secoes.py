@@ -347,12 +347,13 @@ def _item_bairro(page: ft.Page, b: dict, recarregar) -> ft.Control:
     async def anexar_croqui(e):
         try:
             arquivos = await picker.pick_files(
-                dialog_title="Escolher PDF do Croqui",
+                dialog_title="Escolher Croqui (Imagem)",
                 allow_multiple=False,
-                allowed_extensions=["pdf"],
+                allowed_extensions=["jpg", "jpeg", "png"], # <-- Alterado aqui
             )
             if not arquivos:
                 return
+            # O bairro_service.salvar_croqui vai precisar aceitar imagens também
             bairro_service.salvar_croqui(b["id"], arquivos[0].path)
             snack(page, f"Croqui anexado ao bairro {b['nome']}.")
             recarregar()

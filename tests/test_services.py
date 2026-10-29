@@ -1,6 +1,9 @@
 from datetime import date, time, timedelta
+import io
 import json
 from pathlib import Path
+import urllib.error
+import urllib.request
 import zipfile
 import pytest
 
@@ -18,6 +21,7 @@ from app.services import (
     recuperacao_service,
     relatorio_service,
     tr_service,
+    update_service,
 )
 
 
@@ -277,3 +281,82 @@ def test_pdf_escapa_caracteres_especiais_e_relatorio_inclui_bairros_inativos(
     assert pdf_hist.exists() and pdf_hist.stat().st_size > 0
     assert pdf_rec.exists() and pdf_rec.stat().st_size > 0
     assert pdf_anual.exists() and pdf_anual.stat().st_size > 0
+
+
+class _FakeHttpResponse(io.BytesIO):
+    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+        super().__init__(body)
+        self.headers = headers or {}
+
+    def __enter__(self) -> "_FakeHttpResponse":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+
+def test_update_service_verificar_atualizacao(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = json.dumps(
+        {
+            "latest_version": 11,
+            "apk_url": "https://example.com/app-release.apk",
+            "changelog": "Correções e melhorias",
+        }
+    ).encode("utf-8")
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=10, context=None: _FakeHttpResponse(payload),
+    )
+
+    dados = update_service.verificar_atualizacao(build_atual=10)
+    assert dados is not None
+    assert dados["latest_version"] == 11
+    assert dados["apk_url"] == "https://example.com/app-release.apk"
+    assert dados["changelog"] == "Correções e melhorias"
+
+    # Mesma versão ou superior não retorna atualização
+    assert update_service.verificar_atualizacao(build_atual=11) is None
+    assert update_service.verificar_atualizacao(build_atual=12) is None
+
+    # Falha de rede retorna None sem levantar exceção
+    def _falhar(*args, **kwargs):
+        raise urllib.error.URLError("sem internet")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _falhar)
+    assert update_service.verificar_atualizacao(build_atual=10) is None
+
+
+def test_update_service_baixar_apk_em_chunks_e_destino_android(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FLET_PLATFORM", "android")
+    monkeypatch.setenv("EXTERNAL_STORAGE", str(tmp_path))
+
+    destino = update_service.obter_destino_apk()
+    assert destino == tmp_path / "Documents" / "DiarioACE" / "update.apk"
+
+    conteudo_apk = b"PK\x03\x04" + (b"x" * 100)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda req, timeout=60, context=None: _FakeHttpResponse(
+            conteudo_apk, headers={"Content-Length": str(len(conteudo_apk))}
+        ),
+    )
+
+    progresso_chamadas: list[tuple[int, int]] = []
+    caminho_final = update_service.baixar_apk(
+        "https://example.com/app-release.apk",
+        str(destino),
+        chunk_size=16,
+        on_progress=lambda b, t: progresso_chamadas.append((b, t)),
+    )
+
+    assert caminho_final == str(destino)
+    assert Path(caminho_final).read_bytes() == conteudo_apk
+    assert len(progresso_chamadas) > 1
+    assert progresso_chamadas[-1] == (len(conteudo_apk), len(conteudo_apk))
