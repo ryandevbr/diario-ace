@@ -21,7 +21,7 @@ from app.services import (
     update_service,
 )
 from app.utils.share import compartilhar_arquivo
-from app.views import calendario, config, historico, hoje, meu_tr, recuperacao
+from app.views import calendario, config, historico, hoje, meu_tr, recuperacao, calculadora
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ RENDERIZADORES_ABA = (
     calendario.build,
     historico.build,
     recuperacao.build,
+    calculadora.build,
     config.build,
 )
 
@@ -223,7 +224,8 @@ def main(page: ft.Page):
         (2, "Calendário", ft.Icons.CALENDAR_MONTH),
         (3, "Histórico", ft.Icons.HISTORY),
         (4, "Recuperação", ft.Icons.LOCATION_ON),
-        (5, "Configurações", ft.Icons.SETTINGS),
+        (5, "Calc. Larvicida", ft.Icons.WATER_DROP),
+        (6, "Configurações", ft.Icons.SETTINGS),
     ]
 
     def atualizar_header_bh() -> None:
