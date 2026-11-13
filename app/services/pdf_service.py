@@ -173,50 +173,64 @@ def exportar_historico_pdf(
     elementos.append(Paragraph(texto_resumo, normal))
     elementos.append(Spacer(1, 6 * mm))
 
-    prod_por_data = {_iso(p["data"]): p for p in producoes}
+    # Agrupa as produções por data
+    prod_por_data: dict[str, dict] = {}
+    for p in producoes:
+        dt = _iso(p["data"])
+        if dt not in prod_por_data:
+            prod_por_data[dt] = {"quantidade": 0, "bairros": set(), "atividades": set(), "obs": []}
+        
+        prod_por_data[dt]["quantidade"] += p["quantidade"]
+        
+        if p.get("bairro_id"):
+            b = bairros_por_id.get(p["bairro_id"])
+            if b:
+                # Se b for dict (retorno de listar_ativos), pega o nome. Se for string, usa direto.
+                nome_bairro = b.get("nome") if isinstance(b, dict) else b
+                prod_por_data[dt]["bairros"].add(nome_bairro)
+            
+        if p.get("atividade"):
+            prod_por_data[dt]["atividades"].add(p["atividade"])
+            
+        if p.get("observacao"):
+            prod_por_data[dt]["obs"].append(p["observacao"])
+
+    # Agrupa eventos por data
     ev_por_data: dict[str, list] = {}
     for ev in eventos:
         chave = _iso(ev["data"] if isinstance(ev, dict) else ev.data)
         ev_por_data.setdefault(chave, []).append(ev)
 
+    # Junta todas as datas (produções + eventos)
     todas_datas = sorted(set(prod_por_data.keys()) | set(ev_por_data.keys()))
 
     if todas_datas:
-        dados: list[list] = [
-            ["Data", "Bairro", "Atividade", "T", "Eventos / Motivo", "Obs."]
-        ]
+        dados: list[list] = [["Data", "Bairro(s)", "Atividade(s)", "T", "Eventos / Motivo", "Obs."]]
+        
         for dt in todas_datas:
-            p = prod_por_data.get(dt)
-            qtd = p["quantidade"] if p else 0
-            obs = (p.get("observacao") if p else "") or ""
-
-            bairro_nome = ""
-            if p and p.get("bairro_id"):
-                b = bairros_por_id.get(p["bairro_id"])
-                if isinstance(b, dict):
-                    bairro_nome = b.get("nome", "")
-                elif isinstance(b, str):
-                    bairro_nome = b
-
-            atividade = (p.get("atividade") if p else "") or ""
+            p = prod_por_data.get(dt, {"quantidade": 0, "bairros": set(), "atividades": set(), "obs": []})
+            
+            qtd = p["quantidade"]
+            bairros_str = ", ".join(sorted(p["bairros"])) if p["bairros"] else ""
+            atividades_str = ", ".join(sorted(p["atividades"])) if p["atividades"] else ""
+            obs_str = " | ".join(p["obs"])
+            
             evs = ev_por_data.get(dt, [])
             ev_txt = ", ".join(_formatar_evento(e) for e in evs)
 
-            dados.append(
-                [
-                    para_br(date.fromisoformat(dt)),
-                    _p(bairro_nome, normal),
-                    _p(atividade, normal),
-                    str(qtd),
-                    _p(ev_txt, normal),
-                    _p(obs, normal),
-                ]
-            )
+            dados.append([
+                para_br(date.fromisoformat(dt)),
+                _p(bairros_str, normal),
+                _p(atividades_str, normal),
+                str(qtd),
+                _p(ev_txt, normal),
+                _p(obs_str, normal),
+            ])
 
         elementos.append(
             _tabela_padrao(
                 dados,
-                [22 * mm, 40 * mm, 48 * mm, 12 * mm, 55 * mm, None],
+                [22 * mm, 45 * mm, 40 * mm, 12 * mm, 40 * mm, None],
             )
         )
     else:

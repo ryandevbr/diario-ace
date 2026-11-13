@@ -291,3 +291,11 @@ def resumo_contadores_texto(
         color=ft.Colors.GREY_500,
     )
 
+def atualizar_valores_formulario(campos: dict[str, Any], valores: dict[str, Any]) -> None:
+    """Preenche os campos do formulário com os dados de um registro existente ou limpa."""
+    campos["qtd"].value = str(valores.get("quantidade", 0) or 0)
+    campos["atividade"].value = valores.get("atividade") or "Tratamento"
+    campos["fechados"].value = str(valores.get("fechados", 0) or 0)
+    campos["resgatados"].value = str(valores.get("resgatados", 0) or 0)
+    campos["recusados"].value = str(valores.get("recusados", 0) or 0)
+    campos["obs"].value = valores.get("observacao") or ""

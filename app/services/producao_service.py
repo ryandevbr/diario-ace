@@ -17,35 +17,31 @@ def registrar_producao(
 ) -> None:
     agora = datetime.now().isoformat()
     with db_session(commit=True) as conn:
-        existente = conn.execute(
-            "SELECT * FROM producao WHERE data=?", (d.isoformat(),)
-        ).fetchone()
+        # Busca especificamente por data + bairro
+        if bairro_id is not None:
+            existente = conn.execute(
+                "SELECT * FROM producao WHERE data=? AND bairro_id=?", 
+                (d.isoformat(), bairro_id)
+            ).fetchone()
+        else:
+            existente = conn.execute(
+                "SELECT * FROM producao WHERE data=? AND bairro_id IS NULL", 
+                (d.isoformat(),)
+            ).fetchone()
+
         if existente:
-            # Preserva observação/pendência/motivo anteriores caso não informados
             obs_final = obs if obs is not None else existente["observacao"]
-            pend_final = (
-                pendencia if pendencia is not None else existente["pendencia"]
-            )
-            motivo_final = (
-                motivo_id if motivo_id is not None else existente["motivo_id"]
-            )
+            pend_final = pendencia if pendencia is not None else existente["pendencia"]
+            motivo_final = motivo_id if motivo_id is not None else existente["motivo_id"]
             conn.execute(
-                "UPDATE producao SET quantidade=?, tr_id=?, bairro_id=?, atividade=?, "
+                "UPDATE producao SET quantidade=?, tr_id=?, atividade=?, "
                 "fechados=?, resgatados=?, recusados=?, pendencia=?, "
                 "motivo_id=?, observacao=?, atualizado_em=? WHERE id=?",
                 (
-                    quantidade,
-                    tr_id,
-                    bairro_id,
-                    atividade,
-                    fechados,
-                    resgatados,
-                    recusados,
-                    pend_final,
-                    motivo_final,
-                    obs_final,
-                    agora,
-                    existente["id"],
+                    quantidade, tr_id, atividade,
+                    fechados, resgatados, recusados,
+                    pend_final, motivo_final, obs_final,
+                    agora, existente["id"],
                 ),
             )
         else:
@@ -55,19 +51,9 @@ def registrar_producao(
                 "criado_em, atualizado_em) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    d.isoformat(),
-                    tr_id,
-                    bairro_id,
-                    atividade,
-                    quantidade,
-                    fechados,
-                    resgatados,
-                    recusados,
-                    pendencia,
-                    motivo_id,
-                    obs,
-                    agora,
-                    agora,
+                    d.isoformat(), tr_id, bairro_id, atividade, quantidade,
+                    fechados, resgatados, recusados, pendencia, motivo_id, obs,
+                    agora, agora,
                 ),
             )
 
@@ -231,3 +217,11 @@ def totais_do_dia(d: date) -> dict[str, int]:
         "resgatados": p.get("resgatados", 0) or 0,
         "recusados": p.get("recusados", 0) or 0,
     }
+
+def listar_producoes_do_dia(d: date) -> list[dict]:
+    """Retorna todos os registros de produção de um dia específico."""
+    with db_session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM producao WHERE data=?", (d.isoformat(),)
+        ).fetchall()
+    return [dict(r) for r in rows]
