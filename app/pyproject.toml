@@ -1,6 +1,6 @@
 [project]
 name = "diario_ace"
-version = "1.0.0"
+version = "3.0.0"
 description = "Diário do Agente de Combate a Endemias"
 authors = [
     {name = "Ryan Lucas"}
